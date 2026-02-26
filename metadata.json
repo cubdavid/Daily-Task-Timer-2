@@ -1,0 +1,5 @@
+{
+  "name": "Daily Task Timer",
+  "description": "A professional daily task timer with countdown goals, progress tracking, and time distribution visualization.",
+  "requestFramePermissions": []
+}

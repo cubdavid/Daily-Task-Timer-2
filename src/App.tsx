@@ -76,7 +76,7 @@ async function requestNotificationPermission() {
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [activeTaskIds, setActiveTaskIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   const sensors = useSensors(
@@ -95,34 +95,36 @@ export default function App() {
     fetchTasks();
   }, [fetchTasks]);
 
-  // Timer logic
+  // Timer logic — one shared interval ticks all active tasks
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (activeTaskId) {
-      interval = setInterval(() => {
-        setTasks(prev => {
-          const updated = prev.map(t => {
-            if (t.id === activeTaskId) {
-              return { ...t, timeSpent: t.timeSpent + 1 };
-            }
-            return t;
-          });
-          saveTasks(updated);
-
-          // Check for completion
-          const active = updated.find(t => t.id === activeTaskId);
-          if (active && !active.isIndefinite && active.timeSpent >= active.goalSeconds) {
-            setActiveTaskId(null);
-            playCompletionSound();
-            showBrowserNotification(active.name);
-          }
-
-          return updated;
+    if (activeTaskIds.size === 0) return;
+    const interval = setInterval(() => {
+      setTasks(prev => {
+        const completed: Task[] = [];
+        const updated = prev.map(t => {
+          if (!activeTaskIds.has(t.id)) return t;
+          const newTime = t.timeSpent + 1;
+          const done = !t.isIndefinite && newTime >= t.goalSeconds;
+          if (done) completed.push({ ...t, timeSpent: newTime });
+          return { ...t, timeSpent: newTime };
         });
-      }, 1000);
-    }
+        saveTasks(updated);
+        if (completed.length > 0) {
+          setActiveTaskIds(prev => {
+            const next = new Set(prev);
+            completed.forEach(t => next.delete(t.id));
+            return next;
+          });
+          completed.forEach(t => {
+            playCompletionSound();
+            showBrowserNotification(t.name);
+          });
+        }
+        return updated;
+      });
+    }, 1000);
     return () => clearInterval(interval);
-  }, [activeTaskId]);
+  }, [activeTaskIds]);
 
   const handleAddTask = (taskData: Omit<Task, 'id' | 'timeSpent' | 'sortOrder'>, startNow: boolean) => {
     const id = Math.random().toString(36).substr(2, 9);
@@ -137,7 +139,7 @@ export default function App() {
     saveTasks(updated);
     if (startNow) {
       requestNotificationPermission();
-      setActiveTaskId(id);
+      setActiveTaskIds(prev => new Set(prev).add(id));
     }
   };
 
@@ -148,7 +150,7 @@ export default function App() {
   };
 
   const handleDeleteTask = (id: string) => {
-    if (activeTaskId === id) setActiveTaskId(null);
+    setActiveTaskIds(prev => { const next = new Set(prev); next.delete(id); return next; });
     const updated = tasks.filter(t => t.id !== id);
     setTasks(updated);
     saveTasks(updated);
@@ -161,7 +163,7 @@ export default function App() {
   };
 
   const handleDeleteAll = () => {
-    setActiveTaskId(null);
+    setActiveTaskIds(new Set());
     setTasks([]);
     saveTasks([]);
   };
@@ -180,12 +182,16 @@ export default function App() {
   };
 
   const toggleTimer = (id: string) => {
-    if (activeTaskId === id) {
-      setActiveTaskId(null);
-    } else {
-      requestNotificationPermission();
-      setActiveTaskId(id);
-    }
+    setActiveTaskIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        requestNotificationPermission();
+        next.add(id);
+      }
+      return next;
+    });
   };
 
   return (
@@ -258,7 +264,7 @@ export default function App() {
                     >
                       <TaskItem
                         task={task}
-                        isActive={activeTaskId === task.id}
+                        isActive={activeTaskIds.has(task.id)}
                         onToggle={() => toggleTimer(task.id)}
                         onReset={() => handleUpdateTask(task.id, { timeSpent: 0 })}
                         onDelete={() => handleDeleteTask(task.id)}

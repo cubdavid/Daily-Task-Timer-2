@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { 
-  DndContext, 
+import {
+  DndContext,
   closestCenter,
   KeyboardSensor,
   PointerSensor,
@@ -21,6 +21,21 @@ import AddTaskForm from './components/AddTaskForm';
 import TimeSpentChart from './components/TimeSpentChart';
 import { motion, AnimatePresence } from 'motion/react';
 
+const STORAGE_KEY = 'daily-task-timer-tasks';
+
+function loadTasks(): Task[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveTasks(tasks: Task[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+}
+
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -33,16 +48,9 @@ export default function App() {
     })
   );
 
-  const fetchTasks = useCallback(async () => {
-    try {
-      const res = await fetch('/api/tasks');
-      const data = await res.json();
-      setTasks(data);
-    } catch (err) {
-      console.error('Failed to fetch tasks', err);
-    } finally {
-      setLoading(false);
-    }
+  const fetchTasks = useCallback(() => {
+    setTasks(loadTasks());
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -54,36 +62,22 @@ export default function App() {
     let interval: NodeJS.Timeout;
     if (activeTaskId) {
       interval = setInterval(() => {
-        setTasks(prev => prev.map(t => {
-          if (t.id === activeTaskId) {
-            const newTime = t.timeSpent + 1;
-            // Sync with server occasionally or on pause
-            return { ...t, timeSpent: newTime };
-          }
-          return t;
-        }));
+        setTasks(prev => {
+          const updated = prev.map(t => {
+            if (t.id === activeTaskId) {
+              return { ...t, timeSpent: t.timeSpent + 1 };
+            }
+            return t;
+          });
+          saveTasks(updated);
+          return updated;
+        });
       }, 1000);
     }
     return () => clearInterval(interval);
   }, [activeTaskId]);
 
-  // Sync active task time to server on pause or every 10 seconds
-  useEffect(() => {
-    if (!activeTaskId) return;
-    const interval = setInterval(() => {
-      const activeTask = tasks.find(t => t.id === activeTaskId);
-      if (activeTask) {
-        fetch(`/api/tasks/${activeTask.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ timeSpent: activeTask.timeSpent })
-        });
-      }
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [activeTaskId, tasks]);
-
-  const handleAddTask = async (taskData: Omit<Task, 'id' | 'timeSpent' | 'sortOrder'>, startNow: boolean) => {
+  const handleAddTask = (taskData: Omit<Task, 'id' | 'timeSpent' | 'sortOrder'>, startNow: boolean) => {
     const id = Math.random().toString(36).substr(2, 9);
     const newTask: Task = {
       ...taskData,
@@ -91,58 +85,45 @@ export default function App() {
       timeSpent: 0,
       sortOrder: tasks.length
     };
-
-    setTasks([...tasks, newTask]);
+    const updated = [...tasks, newTask];
+    setTasks(updated);
+    saveTasks(updated);
     if (startNow) setActiveTaskId(id);
-
-    await fetch('/api/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newTask)
-    });
   };
 
-  const handleUpdateTask = async (id: string, updates: Partial<Task>) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-    await fetch(`/api/tasks/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates)
-    });
+  const handleUpdateTask = (id: string, updates: Partial<Task>) => {
+    const updated = tasks.map(t => t.id === id ? { ...t, ...updates } : t);
+    setTasks(updated);
+    saveTasks(updated);
   };
 
-  const handleDeleteTask = async (id: string) => {
+  const handleDeleteTask = (id: string) => {
     if (activeTaskId === id) setActiveTaskId(null);
-    setTasks(prev => prev.filter(t => t.id !== id));
-    await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+    const updated = tasks.filter(t => t.id !== id);
+    setTasks(updated);
+    saveTasks(updated);
   };
 
-  const handleResetAll = async () => {
-    setTasks(prev => prev.map(t => ({ ...t, timeSpent: 0 })));
-    await fetch('/api/tasks/reset', { method: 'POST' });
+  const handleResetAll = () => {
+    const updated = tasks.map(t => ({ ...t, timeSpent: 0 }));
+    setTasks(updated);
+    saveTasks(updated);
   };
 
-  const handleDeleteAll = async () => {
+  const handleDeleteAll = () => {
     setActiveTaskId(null);
     setTasks([]);
-    await fetch('/api/tasks/clear', { method: 'POST' });
+    saveTasks([]);
   };
 
-  const handleDragEnd = async (event: DragEndEvent) => {
+  const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (over && active.id !== over.id) {
       setTasks((items: Task[]) => {
         const oldIndex = items.findIndex((i) => i.id === String(active.id));
         const newIndex = items.findIndex((i) => i.id === String(over.id));
-        const newItems = arrayMove(items, oldIndex, newIndex);
-        
-        // Sync reorder to server
-        fetch('/api/tasks/reorder', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskIds: newItems.map(t => t.id) })
-        });
-
+        const newItems = arrayMove(items, oldIndex, newIndex).map((t, i) => ({ ...t, sortOrder: i }));
+        saveTasks(newItems);
         return newItems;
       });
     }
@@ -150,15 +131,6 @@ export default function App() {
 
   const toggleTimer = (id: string) => {
     if (activeTaskId === id) {
-      // Sync time before pausing
-      const task = tasks.find(t => t.id === id);
-      if (task) {
-        fetch(`/api/tasks/${id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ timeSpent: task.timeSpent })
-        });
-      }
       setActiveTaskId(null);
     } else {
       setActiveTaskId(id);
@@ -215,12 +187,12 @@ export default function App() {
               <p className="text-slate-400 text-sm uppercase tracking-widest font-bold">Add a task below to begin tracking</p>
             </div>
           ) : (
-            <DndContext 
+            <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
               onDragEnd={handleDragEnd}
             >
-              <SortableContext 
+              <SortableContext
                 items={tasks.map(t => t.id)}
                 strategy={verticalListSortingStrategy}
               >
@@ -233,7 +205,7 @@ export default function App() {
                       exit={{ opacity: 0, scale: 0.95 }}
                       layout
                     >
-                      <TaskItem 
+                      <TaskItem
                         task={task}
                         isActive={activeTaskId === task.id}
                         onToggle={() => toggleTimer(task.id)}

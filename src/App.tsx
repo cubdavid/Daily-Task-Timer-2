@@ -36,6 +36,44 @@ function saveTasks(tasks: Task[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
 }
 
+function playCompletionSound() {
+  try {
+    const ctx = new AudioContext();
+    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const start = ctx.currentTime + i * 0.18;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.35, start + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.5);
+      osc.start(start);
+      osc.stop(start + 0.5);
+    });
+  } catch {
+    // Audio not available
+  }
+}
+
+function showBrowserNotification(taskName: string) {
+  if (Notification.permission === 'granted') {
+    new Notification('Task complete!', {
+      body: `"${taskName}" has reached its goal.`,
+      icon: '/Daily-Task-Timer-2/favicon.ico',
+    });
+  }
+}
+
+async function requestNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    await Notification.requestPermission();
+  }
+}
+
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -70,6 +108,15 @@ export default function App() {
             return t;
           });
           saveTasks(updated);
+
+          // Check for completion
+          const active = updated.find(t => t.id === activeTaskId);
+          if (active && !active.isIndefinite && active.timeSpent >= active.goalSeconds) {
+            setActiveTaskId(null);
+            playCompletionSound();
+            showBrowserNotification(active.name);
+          }
+
           return updated;
         });
       }, 1000);
@@ -88,7 +135,10 @@ export default function App() {
     const updated = [...tasks, newTask];
     setTasks(updated);
     saveTasks(updated);
-    if (startNow) setActiveTaskId(id);
+    if (startNow) {
+      requestNotificationPermission();
+      setActiveTaskId(id);
+    }
   };
 
   const handleUpdateTask = (id: string, updates: Partial<Task>) => {
@@ -133,6 +183,7 @@ export default function App() {
     if (activeTaskId === id) {
       setActiveTaskId(null);
     } else {
+      requestNotificationPermission();
       setActiveTaskId(id);
     }
   };

@@ -5,7 +5,16 @@ interface TimeSpentChartProps {
   tasks: Task[];
 }
 
-const COLORS = ['#004d7a', '#0066a1', '#0080c9', '#0099f1', '#26b3ff', '#4dc7ff'];
+const COLORS = [
+  '#0080c9', // main blue
+  '#0ea5a0', // teal
+  '#6366f1', // indigo/violet
+  '#f59e0b', // amber
+  '#ec4899', // rose/pink
+  '#10b981', // emerald
+  '#8b5cf6', // purple
+  '#f97316', // orange
+];
 
 export default function TimeSpentChart({ tasks }: TimeSpentChartProps) {
   const data = tasks
